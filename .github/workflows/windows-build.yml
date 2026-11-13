@@ -1,7 +1,8 @@
 # Windows x64 installer for Hidesk Studio, built on GitHub's Windows machine and uploaded to this repo's Release.
-# The source repo is private: it is checked out at tag v<version> with a read-only deploy key (secret SOURCE_DEPLOY_KEY).
-# Manual only. Upload happens only after the package check and the packaged-app launch test pass; latest.yml goes last,
-# so installed apps never see a feed whose installer isn't there yet.
+# The source repo is private: it is checked out with a read-only deploy key (secret SOURCE_DEPLOY_KEY), at tag v<version>
+# by default. `ref` builds a branch instead, for testing only: uploads are refused unless building the tag.
+# Manual only. Upload happens only after the package check, the Google connector start test and the packaged-app launch
+# test pass; latest.yml goes last, so installed apps never see a feed whose installer isn't there yet.
 name: windows-build
 
 on:
@@ -10,6 +11,10 @@ on:
       version:
         description: "Version, e.g. 0.4.60 (tag v<version> must exist in the source repo)"
         required: true
+      ref:
+        description: "Branch to build instead of the tag (test runs only; cannot be combined with publish)"
+        required: false
+        default: ""
       publish:
         description: "Upload to the Release after the checks pass"
         type: boolean
@@ -32,14 +37,18 @@ jobs:
     timeout-minutes: 60
     env:
       VERSION: ${{ inputs.version }}
+      REF: ${{ inputs.ref }}
+      PUBLISH: ${{ inputs.publish }}
     steps:
-      - name: Check version
-        run: '[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]'
+      - name: Check inputs
+        run: |
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          if [[ -n "$REF" && "$PUBLISH" == "true" ]]; then echo "publish only from tag v$VERSION, not from ref $REF"; exit 1; fi
 
       - uses: actions/checkout@v4
         with:
           repository: harrykangyiwei1999/hidesk-studio
-          ref: v${{ inputs.version }}
+          ref: ${{ inputs.ref != '' && inputs.ref || format('v{0}', inputs.version) }}
           ssh-key: ${{ secrets.SOURCE_DEPLOY_KEY }}
           persist-credentials: false
 
@@ -66,6 +75,12 @@ jobs:
           grep -qx "version: $VERSION" release/latest.yml
           test -f "release/hidesk-studio-$VERSION-setup.exe"
           test -f "release/hidesk-studio-$VERSION-setup.exe.blockmap"
+
+      # The connector's bundled Python actually starts on Windows (pywin32 needs its .pth processed; see sidecar.ts).
+      - name: Google connector start test
+        run: |
+          test -d build/google-mcp/site-packages  # the test skips itself without the runtime
+          npx vitest run test/google-bridge.test.ts
 
       # Launches the packaged app and waits for its window (scripts/smoke-packaged.ts).
       - name: Smoke test packaged app
