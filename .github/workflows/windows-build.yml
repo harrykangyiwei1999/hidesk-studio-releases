@@ -50,6 +50,10 @@ jobs:
       # node-pty uses its bundled win32-x64 prebuild; nothing is compiled.
       - run: npm ci
 
+      # npm run dist bundles the Google connector's Python runtime (scripts/build-google-mcp.ts), which needs uv.
+      - name: Install uv
+        run: python -m pip install --quiet uv
+
       # Same as the release script's packaging step: electron-builder --win nsis (x64 on this machine) + scripts/check-package.ts.
       - name: Package
         run: npm run dist
