@@ -1,0 +1,79 @@
+# Windows x64 installer for Hidesk Studio, built on GitHub's Windows machine and uploaded to this repo's Release.
+# The source repo is private: it is checked out at tag v<version> with a read-only deploy key (secret SOURCE_DEPLOY_KEY).
+# Manual only. Upload happens only after the package check and the packaged-app launch test pass; latest.yml goes last,
+# so installed apps never see a feed whose installer isn't there yet.
+name: windows-build
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version, e.g. 0.4.60 (tag v<version> must exist in the source repo)"
+        required: true
+      publish:
+        description: "Upload to the Release after the checks pass"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-build
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - name: Check version
+        run: '[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]'
+
+      - uses: actions/checkout@v4
+        with:
+          repository: harrykangyiwei1999/hidesk-studio
+          ref: v${{ inputs.version }}
+          ssh-key: ${{ secrets.SOURCE_DEPLOY_KEY }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # node-pty uses its bundled win32-x64 prebuild; nothing is compiled.
+      - run: npm ci
+
+      # Same as the release script's packaging step: electron-builder --win nsis (x64 on this machine) + scripts/check-package.ts.
+      - name: Package
+        run: npm run dist
+
+      - name: Check output
+        run: |
+          prebuilds="release/win-unpacked/resources/app.asar.unpacked/node_modules/node-pty/prebuilds"
+          test -f "$prebuilds/win32-x64/pty.node"
+          test ! -e "$prebuilds/darwin-arm64"
+          grep -qx "version: $VERSION" release/latest.yml
+          test -f "release/hidesk-studio-$VERSION-setup.exe"
+          test -f "release/hidesk-studio-$VERSION-setup.exe.blockmap"
+
+      # Launches the packaged app and waits for its window (scripts/smoke-packaged.ts).
+      - name: Smoke test packaged app
+        run: node scripts/smoke-packaged.ts "release/win-unpacked/Hidesk Studio.exe"
+
+      # publish-release.ts uploads to electron-builder.yml's publish repo (this one), latest.yml last.
+      - name: Upload to Release
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          node scripts/publish-release.ts "$VERSION"
+          "release/hidesk-studio-$VERSION-setup.exe"
+          "release/hidesk-studio-$VERSION-setup.exe.blockmap"
+          release/latest.yml
